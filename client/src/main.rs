@@ -18,7 +18,6 @@ use ratatui::{
     Frame, Terminal,
 };
 use tokio::sync::Mutex;
-use tokio::time::sleep;
 
 pub mod protos;
 
@@ -88,6 +87,12 @@ impl AppState {
 
 struct App {
     state: Arc<Mutex<AppState>>,
+}
+
+const FRAMES_PER_SECOND: u32 = 60;
+
+fn frame_duration() -> Duration {
+    Duration::from_secs(1) / FRAMES_PER_SECOND
 }
 
 fn ui(f: &mut Frame<'_>, app: &App) {
@@ -359,6 +364,7 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: App,
 ) -> Result<()> {
+    let frame_duration = frame_duration();
     let state = app.state.clone();
     let mut data_task: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -414,7 +420,7 @@ async fn run_app(
                                     DataStatus::Unreliable,
                                 );
                             }
-                            sleep(Duration::from_secs(1)).await;
+                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
                 }
@@ -423,7 +429,7 @@ async fn run_app(
 
         terminal.draw(|f| ui(f, &app))?;
 
-        sleep(Duration::from_millis(16)).await; // ~60 FPS
+        tokio::time::sleep(frame_duration).await;
     }
 
     if let Some(task) = data_task {
@@ -438,7 +444,7 @@ async fn run_app(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    color_eyre::install().expect("Failed to install color eyre");
+    color_eyre::install().expect("Failed to install panic hook");
     tracing_subscriber::fmt::init();
 
     enable_raw_mode()?;

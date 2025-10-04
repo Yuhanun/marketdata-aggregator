@@ -13,7 +13,7 @@ const SYMBOL: &str = "ethbtc";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    color_eyre::install().expect("Failed to install color eyre");
+    color_eyre::install().expect("Failed to install panic hook");
     tracing_subscriber::fmt::init();
 
     rustls::crypto::aws_lc_rs::default_provider()
