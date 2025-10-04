@@ -1,0 +1,8 @@
+.direnv/
+target/
+rust-analyzer-target/
+
+
+# Added by cargo
+
+/target
