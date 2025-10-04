@@ -377,7 +377,12 @@ async fn run_app(
             }
         }
 
-        if data_task.is_none() || data_task.as_ref().unwrap().is_finished() {
+        let data_task_finished = data_task
+            .as_ref()
+            .map(|task| task.is_finished())
+            .unwrap_or(false);
+
+        if data_task.is_none() || data_task_finished {
             if data_task.is_some() {
                 if let Ok(mut app_state) = state.try_lock() {
                     app_state.update_status(ConnectionStatus::Disconnected, DataStatus::Unreliable);

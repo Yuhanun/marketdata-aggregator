@@ -37,13 +37,17 @@ async fn main() -> anyhow::Result<()> {
     let run_server = server.clone();
     let mut server_run_future = tokio::spawn(async move { run_server.run(receiver).await });
 
+    let socket_addrs = "0.0.0.0:50051"
+        .to_socket_addrs()?
+        .next()
+        .expect("Failed to get socket addrs");
     let server_future = tonic::transport::Server::builder()
         .add_service(
             server::protos::orderbook_aggregator_server::OrderbookAggregatorServer::from_arc(
                 server,
             ),
         )
-        .serve("0.0.0.0:50051".to_socket_addrs()?.next().unwrap());
+        .serve(socket_addrs);
 
     let mut server_future = tokio::spawn(server_future);
 
