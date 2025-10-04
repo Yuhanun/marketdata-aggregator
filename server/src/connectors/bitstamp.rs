@@ -164,7 +164,7 @@ impl BitstampConnector {
             // We seem to have a properly connected websocket client now :)
             websocket_client = Some(connected_websocket_client);
 
-            tracing::info!("Message: {}", message);
+            tracing::debug!("Message: {}", message);
 
             let message: BitstampMessage<serde_json::Value> = serde_json::from_str(&message)
                 .with_context(|| format!("Failed to parse Bitstamp message: {message}"))?;

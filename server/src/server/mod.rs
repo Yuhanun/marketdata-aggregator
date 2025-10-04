@@ -20,7 +20,7 @@ const MAXIMUM_LEVELS: usize = 10;
 fn merge_levels<'a, F>(
     mut binance_iter: impl Iterator<Item = (&'a Price, &'a Volume)>,
     mut bitstamp_iter: impl Iterator<Item = (&'a Price, &'a Volume)>,
-    should_prioritize_first: F,
+    comparator: F,
 ) -> Vec<protos::Level>
 where
     F: Fn(&Price, &Price) -> bool,
@@ -34,7 +34,7 @@ where
     {
         match (binance_current, bitstamp_current) {
             (Some((binance_price, binance_volume)), Some((bitstamp_price, bitstamp_volume))) => {
-                if should_prioritize_first(binance_price, bitstamp_price) {
+                if comparator(binance_price, bitstamp_price) {
                     levels.push(protos::Level {
                         exchange: Exchange::Binance.to_string(),
                         price: binance_price.as_f64(),
@@ -116,20 +116,17 @@ fn orderbooks_sanity_checks(orderbooks: &Orderbooks) {
 }
 
 pub fn generate_summary(orderbooks: &Orderbooks) -> protos::Summary {
-    // We need AT MOST 10 DISTINCT levels from both sides
     let binance = orderbooks.binance();
     let bitstamp = orderbooks.bitstamp();
 
     orderbooks_sanity_checks(orderbooks);
 
-    // For bids, we want higher prices first (binance > bitstamp)
     let top_bids = merge_levels(
         binance.bids.iter().rev(),
         bitstamp.bids.iter().rev(),
         std::cmp::PartialOrd::gt,
     );
 
-    // For asks, we want lower prices first (binance < bitstamp)
     let top_asks = merge_levels(
         binance.asks.iter(),
         bitstamp.asks.iter(),
@@ -157,6 +154,7 @@ pub fn generate_summary(orderbooks: &Orderbooks) -> protos::Summary {
         tracing::warn!("Spread is negative: {spread}");
     }
 
+    // Logging this is useful for debugging, probably wipe it for prod builds tho.
     let top_bid_string = top_bids
         .first()
         .map(|bid| format!("{} @ {:.8} - {}", bid.amount, bid.price, bid.exchange))
@@ -193,12 +191,10 @@ impl SummaryServer {
             let event = receiver.recv().await;
             match event {
                 Some(event) => {
-                    tracing::info!("Received event from exchange: {:?}", event.exchange);
                     match event.exchange {
                         Exchange::Bitstamp => last_bitstamp_update = Instant::now(),
                         Exchange::Binance => last_binance_update = Instant::now(),
                     }
-                    tracing::info!("Event: {:?}", serde_json::to_string(&event).unwrap());
                     orderbooks.process_orderbook_event(event);
                     let summary = generate_summary(&orderbooks);
                     let sender = self.summary_sender.write().await;
@@ -276,7 +272,6 @@ mod tests {
     };
     use rstest::*;
 
-    // Helper function to create test orderbooks using string literals
     fn create_test_orderbooks_flexible(
         binance_bids: Vec<(&str, f64)>,
         binance_asks: Vec<(&str, f64)>,
@@ -284,8 +279,7 @@ mod tests {
         bitstamp_asks: Vec<(&str, f64)>,
     ) -> Orderbooks {
         let mut orderbooks = Orderbooks::new();
-        
-        // Process Binance snapshot
+
         let binance_event = OrderbookEvent {
             exchange: Exchange::Binance,
             orderbook_update: OrderbookUpdate::Snapshot(Orderbook {
@@ -307,7 +301,6 @@ mod tests {
         };
         orderbooks.process_orderbook_event(binance_event);
 
-        // Process Bitstamp snapshot
         let bitstamp_event = OrderbookEvent {
             exchange: Exchange::Bitstamp,
             orderbook_update: OrderbookUpdate::Snapshot(Orderbook {
@@ -332,7 +325,6 @@ mod tests {
         orderbooks
     }
 
-    // Test case data structures for parameterized testing
     #[derive(Debug, Clone)]
     struct OrderbookTestData<'a> {
         binance_bids: Vec<(&'a str, f64)>,
@@ -340,7 +332,6 @@ mod tests {
         bitstamp_bids: Vec<(&'a str, f64)>,
         bitstamp_asks: Vec<(&'a str, f64)>,
     }
-
 
     #[derive(Debug, Clone)]
     struct ExpectedResult {
@@ -350,7 +341,6 @@ mod tests {
         should_panic: bool,
     }
 
-    // Test case fixtures using string literals
     fn normal_market_data() -> OrderbookTestData<'static> {
         OrderbookTestData {
             binance_bids: vec![
@@ -407,15 +397,15 @@ mod tests {
         OrderbookTestData {
             binance_bids: vec![("50000.00000000", 1.0)],
             binance_asks: vec![("50001.00000000", 1.0)],
-            bitstamp_bids: vec![("50000.00000000", 2.0)], // Same price as Binance bid
-            bitstamp_asks: vec![("50001.00000000", 2.0)], // Same price as Binance ask
+            bitstamp_bids: vec![("50000.00000000", 2.0)],
+            bitstamp_asks: vec![("50001.00000000", 2.0)],
         }
     }
 
     fn crossed_market_binance_data() -> OrderbookTestData<'static> {
         OrderbookTestData {
-            binance_bids: vec![("50001.00000000", 1.0)], // Higher bid
-            binance_asks: vec![("50000.00000000", 1.0)], // Lower ask (crossed market)
+            binance_bids: vec![("50001.00000000", 1.0)],
+            binance_asks: vec![("50000.00000000", 1.0)],
             bitstamp_bids: vec![],
             bitstamp_asks: vec![],
         }
@@ -425,8 +415,8 @@ mod tests {
         OrderbookTestData {
             binance_bids: vec![],
             binance_asks: vec![],
-            bitstamp_bids: vec![("50001.00000000", 1.0)], // Higher bid
-            bitstamp_asks: vec![("50000.00000000", 1.0)], // Lower ask (crossed market)
+            bitstamp_bids: vec![("50001.00000000", 1.0)],
+            bitstamp_asks: vec![("50000.00000000", 1.0)],
         }
     }
 
@@ -440,7 +430,6 @@ mod tests {
     }
 
     fn max_levels_data() -> OrderbookTestData<'static> {
-        // Use static string literals for the max levels test
         OrderbookTestData {
             binance_bids: vec![
                 ("50000.00000000", 1.0),
@@ -495,7 +484,24 @@ mod tests {
         }
     }
 
-    // Parameterized tests using rstest
+    fn negative_spread_arbitrage_data() -> OrderbookTestData<'static> {
+        OrderbookTestData {
+            binance_bids: vec![("50010.00000000", 1.0), ("50009.00000000", 2.0)],
+            binance_asks: vec![("50011.00000000", 1.0), ("50012.00000000", 2.0)],
+            bitstamp_bids: vec![("50000.00000000", 1.0), ("49999.00000000", 2.0)],
+            bitstamp_asks: vec![("50005.00000000", 1.0), ("50006.00000000", 2.0)],
+        }
+    }
+
+    fn single_exchange_crossed_market_data() -> OrderbookTestData<'static> {
+        OrderbookTestData {
+            binance_bids: vec![("50010.00000000", 1.0), ("50009.00000000", 2.0)],
+            binance_asks: vec![("50005.00000000", 1.0), ("50006.00000000", 2.0)],
+            bitstamp_bids: vec![("50000.00000000", 1.0), ("49999.00000000", 2.0)],
+            bitstamp_asks: vec![("50011.00000000", 1.0), ("50012.00000000", 2.0)],
+        }
+    }
+
     #[rstest]
     #[case(normal_market_data(), ExpectedResult { spread: 1.0, bid_count: 6, ask_count: 6, should_panic: false })]
     #[case(binance_only_data(), ExpectedResult { spread: 1.0, bid_count: 2, ask_count: 2, should_panic: false })]
@@ -504,6 +510,8 @@ mod tests {
     #[case(identical_prices_data(), ExpectedResult { spread: 1.0, bid_count: 2, ask_count: 2, should_panic: false })]
     #[case(precision_data(), ExpectedResult { spread: 1.0, bid_count: 2, ask_count: 2, should_panic: false })]
     #[case(max_levels_data(), ExpectedResult { spread: 1.0, bid_count: 10, ask_count: 11, should_panic: false })]
+    #[case(negative_spread_arbitrage_data(), ExpectedResult { spread: -5.0, bid_count: 4, ask_count: 4, should_panic: false })]
+    #[case(single_exchange_crossed_market_data(), ExpectedResult { spread: 0.0, bid_count: 0, ask_count: 0, should_panic: true })]
     fn test_generate_summary_parameterized(
         #[case] data: OrderbookTestData<'static>,
         #[case] expected: ExpectedResult,
@@ -542,10 +550,8 @@ mod tests {
         assert!(result.is_err(), "Expected panic for crossed market");
     }
 
-    // Additional specific tests for ordering and exchange identification
     #[test]
     fn test_generate_summary_ordering_bids() {
-        // Using string literals for all prices
         let orderbooks = create_test_orderbooks_flexible(
             vec![("50000.00000000", 1.0), ("49998.00000000", 2.0)],
             vec![("50001.00000000", 1.0), ("50003.00000000", 2.0)],
@@ -555,7 +561,6 @@ mod tests {
 
         let summary = generate_summary(&orderbooks);
 
-        // Bids should be ordered from highest to lowest price
         let expected_bid_prices = vec![50000.0, 49999.0, 49998.0, 49997.0];
         let actual_bid_prices: Vec<f64> = summary.bids.iter().map(|b| b.price).collect();
         assert_eq!(actual_bid_prices, expected_bid_prices);
@@ -563,17 +568,15 @@ mod tests {
 
     #[test]
     fn test_generate_summary_ordering_asks() {
-        // Using string literals for all prices
         let orderbooks = create_test_orderbooks_flexible(
             vec![("50000.00000000", 1.0), ("49998.00000000", 2.0)],
-            vec![("50001.00000000", 1.0), ("50003.00000000", 2.0)], // Binance: lower ask prices
+            vec![("50001.00000000", 1.0), ("50003.00000000", 2.0)],
             vec![("49999.00000000", 1.0), ("49997.00000000", 2.0)],
-            vec![("50002.00000000", 1.0), ("50004.00000000", 2.0)], // Bitstamp: higher ask prices
+            vec![("50002.00000000", 1.0), ("50004.00000000", 2.0)],
         );
 
         let summary = generate_summary(&orderbooks);
 
-        // Asks should be ordered from lowest to highest price
         let expected_ask_prices = vec![50001.0, 50002.0, 50003.0, 50004.0];
         let actual_ask_prices: Vec<f64> = summary.asks.iter().map(|a| a.price).collect();
         assert_eq!(actual_ask_prices, expected_ask_prices);
@@ -581,7 +584,6 @@ mod tests {
 
     #[test]
     fn test_generate_summary_exchange_identification() {
-        // Using string literals for all prices
         let orderbooks = create_test_orderbooks_flexible(
             vec![("50000.00000000", 1.0)],
             vec![("50001.00000000", 1.0)],
@@ -591,7 +593,6 @@ mod tests {
 
         let summary = generate_summary(&orderbooks);
 
-        // Check that exchanges are correctly identified
         let binance_bids: Vec<_> = summary
             .bids
             .iter()
@@ -626,27 +627,65 @@ mod tests {
 
     #[test]
     fn test_generate_summary_identical_prices_exchanges() {
-        // Using string literals for all prices
         let orderbooks = create_test_orderbooks_flexible(
             vec![("50000.00000000", 1.0)],
             vec![("50001.00000000", 1.0)],
-            vec![("50000.00000000", 2.0)], // Same price as Binance bid
-            vec![("50001.00000000", 2.0)], // Same price as Binance ask
+            vec![("50000.00000000", 2.0)],
+            vec![("50001.00000000", 2.0)],
         );
 
         let summary = generate_summary(&orderbooks);
 
-        // Should include both exchanges for identical prices
         assert_eq!(summary.bids.len(), 2);
         assert_eq!(summary.asks.len(), 2);
 
-        // Both should have the same price
         assert_eq!(summary.bids[0].price, summary.bids[1].price);
         assert_eq!(summary.asks[0].price, summary.asks[1].price);
 
-        // Should have different exchanges
         let exchanges: std::collections::HashSet<_> =
             summary.bids.iter().map(|b| &b.exchange).collect();
         assert_eq!(exchanges.len(), 2);
+    }
+
+    #[test]
+    fn test_generate_summary_negative_spread_arbitrage() {
+        let orderbooks = create_test_orderbooks_flexible(
+            vec![("50010.00000000", 1.0), ("50009.00000000", 2.0)],
+            vec![("50011.00000000", 1.0), ("50012.00000000", 2.0)],
+            vec![("50000.00000000", 1.0), ("49999.00000000", 2.0)],
+            vec![("50005.00000000", 1.0), ("50006.00000000", 2.0)],
+        );
+
+        let summary = generate_summary(&orderbooks);
+
+        assert_eq!(summary.spread, -5.0);
+
+        assert_eq!(summary.bids.len(), 4);
+        assert_eq!(summary.asks.len(), 4);
+
+        assert_eq!(summary.bids[0].price, 50010.0);
+        assert_eq!(summary.bids[0].exchange, "binance");
+
+        assert_eq!(summary.asks[0].price, 50005.0);
+        assert_eq!(summary.asks[0].exchange, "bitstamp");
+
+        assert!(summary.bids[0].price >= summary.bids[1].price);
+        assert!(summary.asks[0].price <= summary.asks[1].price);
+    }
+
+    #[test]
+    fn test_generate_summary_single_exchange_crossed_market_panics() {
+        let orderbooks = create_test_orderbooks_flexible(
+            vec![("50010.00000000", 1.0), ("50009.00000000", 2.0)],
+            vec![("50005.00000000", 1.0), ("50006.00000000", 2.0)],
+            vec![("50000.00000000", 1.0), ("49999.00000000", 2.0)],
+            vec![("50011.00000000", 1.0), ("50012.00000000", 2.0)],
+        );
+
+        let result = std::panic::catch_unwind(|| generate_summary(&orderbooks));
+        assert!(
+            result.is_err(),
+            "Expected panic for single exchange crossed market"
+        );
     }
 }

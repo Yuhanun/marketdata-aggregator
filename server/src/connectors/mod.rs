@@ -2,7 +2,7 @@ use anyhow::Context;
 use std::str::FromStr;
 
 use num_traits::ToPrimitive;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 
 pub mod binance;
 pub mod bitstamp;
@@ -13,8 +13,7 @@ type WebsocketClient =
 pub type MarketDataChannelSender = tokio::sync::mpsc::Sender<OrderbookEvent>;
 pub type MarketDataChannelReceiver = tokio::sync::mpsc::Receiver<OrderbookEvent>;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 pub struct Price(i64);
 
 // 8 Decimals = 1 satoshi
@@ -58,8 +57,7 @@ impl<'de> Deserialize<'de> for Price {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Volume(f64);
 
 impl Volume {
@@ -92,7 +90,7 @@ impl<'de> Deserialize<'de> for Volume {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LevelUpdate {
     pub price: Price,
     pub volume: Volume,
@@ -104,13 +102,13 @@ impl From<(Price, Volume)> for LevelUpdate {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Orderbook {
     pub bids_update: Vec<LevelUpdate>,
     pub asks_update: Vec<LevelUpdate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Exchange {
     Binance,
     Bitstamp,
@@ -125,14 +123,14 @@ impl std::fmt::Display for Exchange {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OrderbookUpdate {
     // Note: Neither exchange does incremental updates, so we only have snapshot updates
     Update(Orderbook),
     Snapshot(Orderbook),
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OrderbookEvent {
     pub exchange: Exchange,
     pub orderbook_update: OrderbookUpdate,
